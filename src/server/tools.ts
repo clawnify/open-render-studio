@@ -187,6 +187,7 @@ export const TOOLS: ToolDef[] = [
     description:
       "Animate a still render into a short cinematic walkthrough clip. Renders asynchronously via OpenRouter video (takes a minute or two).",
     inputs: [
+      { name: "model", label: "Model", type: "select", options: ["bytedance/seedance-2.0", "google/veo-3.1-fast"], required: true },
       { name: "motion", label: "Camera motion (optional)", type: "text", placeholder: "slow push-in toward the window" },
     ],
     buildPrompt: (p) =>

@@ -21,9 +21,10 @@ export type ImageEnv = {
 export const DEFAULT_IMAGE_MODEL = "google/gemini-3.1-flash-image-preview";
 export const PRO_IMAGE_MODEL = "google/gemini-3-pro-image-preview";
 
-// Image-to-video model on OpenRouter's async video API. Wan is the cheaper
-// default; swap to "google/veo-3.1" for higher fidelity.
-export const DEFAULT_VIDEO_MODEL = "alibaba/wan-2.7";
+// Image-to-video models on OpenRouter's async video API. Seedance is the fast
+// default; Veo 3.1 Fast trades a little speed for higher fidelity.
+export const DEFAULT_VIDEO_MODEL = "bytedance/seedance-2.0";
+export const VIDEO_MODELS = ["bytedance/seedance-2.0", "google/veo-3.1-fast"];
 
 function looksLikeHtml(s: string): boolean {
   return /<!doctype html>|<html\b/i.test(s.slice(0, 200));

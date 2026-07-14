@@ -81,7 +81,11 @@ async function runRender(
     if (tool.mode === "video") {
       // Async: kick off the job, store its id, leave the row pending. The client
       // (or agent) polls GET /api/renders/:id until it flips to done/error.
-      const { jobId } = await startVideo(env, { imageUrl: input.source_image_url, prompt });
+      const { jobId } = await startVideo(env, {
+        imageUrl: input.source_image_url,
+        prompt,
+        model: input.params.model || undefined,
+      });
       await run("UPDATE renders SET provider_job_id=? WHERE id=?", [jobId, id]);
     } else if (tool.id === "enhance") {
       // Prefer a true upscaler when fal is configured; otherwise fall back to a
