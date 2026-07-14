@@ -1,0 +1,14 @@
+{
+  "$schema": "https://app.clawnify.com/schema/v1/clawnify.json",
+  "name": "Open Render Studio",
+  "description": "AI staging & render editing for interior-design and archviz studios. Snap a room photo, run one-click directed edits (restyle, material swap, furnish, declutter, relight, upscale, walkthrough video), and package variants into a client proposal. Runs on your own image-model key. An open-source alternative to Collov / InteriorAI.",
+  "app": {
+    "framework": "react+hono",
+    "database": true,
+    "storage": true
+  },
+  "env": {
+    "required": ["OPENROUTER_API_KEY"],
+    "optional": ["FAL_API_KEY", "OPENAI_API_KEY"]
+  }
+}

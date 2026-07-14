@@ -1,0 +1,14 @@
+node_modules/
+dist/
+data.db
+data.db-wal
+data.db-shm
+uploads/
+.env
+.dev.vars
+.wrangler/
+.claude/
+.clawnify/
+
+# macOS
+.DS_Store

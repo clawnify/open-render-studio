@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+/* Tokens mirror DESIGN.md — the shared Clawnify Apps design system. */
+@theme {
+  --color-background: #f8f9fa;
+  --color-surface: #ffffff;
+  --color-sunken: #f1f5f9;
+  --color-foreground: #1a202c;
+  --color-muted: #475569;
+  --color-faint: #94a3b8;
+  --color-border: #e2e8f0;
+  --color-primary: #dd5164;
+  --color-primary-hover: #c53a4e;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+html,
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}
