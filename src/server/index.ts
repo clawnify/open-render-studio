@@ -2,7 +2,7 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { initDB, query, get, run } from "./db.js";
 import { initUploads, putUpload, getUpload } from "./uploads.js";
 import { TOOLS, getTool, publicTool } from "./tools.js";
-import { editImage, upscaleImage, imageToVideo } from "./image.js";
+import { editImage, upscaleImage, startVideo, pollVideo } from "./image.js";
 
 type Env = {
   Bindings: {
@@ -48,6 +48,7 @@ type RenderRow = {
   result_image_url: string | null;
   result_video_url: string | null;
   status: string;
+  provider_job_id: string | null;
   error: string | null;
   disclaimer: string | null;
   created_at: string;
@@ -78,8 +79,10 @@ async function runRender(
 
   try {
     if (tool.mode === "video") {
-      const { url } = await imageToVideo(env, { imageUrl: input.source_image_url, prompt });
-      await run("UPDATE renders SET status='done', result_video_url=? WHERE id=?", [url, id]);
+      // Async: kick off the job, store its id, leave the row pending. The client
+      // (or agent) polls GET /api/renders/:id until it flips to done/error.
+      const { jobId } = await startVideo(env, { imageUrl: input.source_image_url, prompt });
+      await run("UPDATE renders SET provider_job_id=? WHERE id=?", [jobId, id]);
     } else if (tool.id === "enhance") {
       // Prefer a true upscaler when fal is configured; otherwise fall back to a
       // model enhance pass so the tool still works on an OpenRouter-only setup.
@@ -101,6 +104,28 @@ async function runRender(
   }
   const row = await get<RenderRow>("SELECT * FROM renders WHERE id=?", [id]);
   return row!;
+}
+
+/**
+ * Poll-and-advance a render. For a pending video render it checks the provider
+ * job and flips the row to done/error when ready. No-op for anything already
+ * resolved. This is what the client/agent hits to watch an async video finish.
+ */
+async function refreshRender(env: Env["Bindings"], id: string): Promise<RenderRow | null> {
+  const row = await get<RenderRow>("SELECT * FROM renders WHERE id=?", [id]);
+  if (!row) return null;
+  if (row.status !== "pending" || !row.provider_job_id) return row;
+  try {
+    const res = await pollVideo(env, row.provider_job_id);
+    if (res.status === "completed") {
+      await run("UPDATE renders SET status='done', result_video_url=? WHERE id=?", [res.url, id]);
+    } else if (res.status === "failed") {
+      await run("UPDATE renders SET status='error', error=? WHERE id=?", [res.error, id]);
+    }
+  } catch (e) {
+    await run("UPDATE renders SET status='error', error=? WHERE id=?", [e instanceof Error ? e.message : String(e), id]);
+  }
+  return (await get<RenderRow>("SELECT * FROM renders WHERE id=?", [id]))!;
 }
 
 // ── Tools (UI) ───────────────────────────────────────────────────────
@@ -127,6 +152,13 @@ app.post("/api/render", async (c) => {
     params: body.params || {},
     project_id: body.project_id || "",
   });
+  return c.json(row);
+});
+
+// Poll a single render — advances a pending async video toward done/error.
+app.get("/api/renders/:id", async (c) => {
+  const row = await refreshRender(c.env, c.req.param("id"));
+  if (!row) return c.json({ error: "Not found" }, 404);
   return c.json(row);
 });
 
@@ -300,6 +332,34 @@ publicApp.openapi(renderRoute, async (c) => {
     params: body.params || {},
     project_id: body.project_id || "",
   });
+  return c.json(
+    {
+      id: row.id,
+      tool_id: row.tool_id,
+      status: row.status,
+      result_image_url: row.result_image_url,
+      result_video_url: row.result_video_url,
+      prompt: row.prompt,
+      disclaimer: row.disclaimer,
+      error: row.error,
+    },
+    200,
+  );
+});
+
+const getRenderRoute = createRoute({
+  method: "get",
+  path: "/api/v1/renders/{id}",
+  summary: "Poll a render. Image edits finish immediately; a video render stays 'pending' until the async job completes — poll this until status is 'done' or 'error'.",
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { content: { "application/json": { schema: RenderResultSchema } }, description: "Render state" },
+    404: { content: { "application/json": { schema: z.object({ error: z.string() }) } }, description: "Not found" },
+  },
+});
+publicApp.openapi(getRenderRoute, async (c) => {
+  const row = await refreshRender(c.env, c.req.valid("param").id);
+  if (!row) return c.json({ error: "Not found" }, 404);
   return c.json(
     {
       id: row.id,

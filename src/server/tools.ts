@@ -185,7 +185,7 @@ export const TOOLS: ToolDef[] = [
     icon: "video",
     mode: "video",
     description:
-      "Animate a still render into a short cinematic walkthrough clip. Requires a FAL key (image-to-video).",
+      "Animate a still render into a short cinematic walkthrough clip. Renders asynchronously via OpenRouter video (takes a minute or two).",
     inputs: [
       { name: "motion", label: "Camera motion (optional)", type: "text", placeholder: "slow push-in toward the window" },
     ],

@@ -21,6 +21,10 @@ export type ImageEnv = {
 export const DEFAULT_IMAGE_MODEL = "google/gemini-3.1-flash-image-preview";
 export const PRO_IMAGE_MODEL = "google/gemini-3-pro-image-preview";
 
+// Image-to-video model on OpenRouter's async video API. Wan is the cheaper
+// default; swap to "google/veo-3.1" for higher fidelity.
+export const DEFAULT_VIDEO_MODEL = "alibaba/wan-2.7";
+
 function looksLikeHtml(s: string): boolean {
   return /<!doctype html>|<html\b/i.test(s.slice(0, 200));
 }
@@ -149,21 +153,67 @@ export async function upscaleImage(
   return { url: await rehost(data.image.url, "png", "image/png") };
 }
 
-/** Image-to-video via fal.ai Kling. Requires FAL_API_KEY. */
-export async function imageToVideo(
+// ── Video (OpenRouter async /api/v1/videos) ──────────────────────────
+//
+// Video generation is asynchronous (30s–several minutes), so it can't be held
+// open inside a request. `startVideo` kicks off the job and returns immediately;
+// the caller persists the job id and later `pollVideo`s until it's done. The
+// finished clip is behind an authenticated content URL, so we download it with
+// the key server-side and re-host in R2 — the browser never sees the key.
+
+export type VideoStatus =
+  | { status: "pending" }
+  | { status: "completed"; url: string }
+  | { status: "failed"; error: string };
+
+/** Kick off an image-to-video job. Returns the OpenRouter job id. */
+export async function startVideo(
   env: ImageEnv,
-  opts: { imageUrl: string; prompt: string },
-): Promise<{ url: string }> {
-  if (!env.FAL_API_KEY) throw new Error("Walkthrough Video needs FAL_API_KEY set in the app environment");
-  const inputUrl = await resolveForProvider(opts.imageUrl);
-  const res = await fetchWith5xxRetry("https://fal.run/fal-ai/kling-video/v1/standard/image-to-video", {
+  opts: { imageUrl: string; prompt: string; model?: string },
+): Promise<{ jobId: string }> {
+  if (!env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not set");
+  const firstFrame = await resolveForProvider(opts.imageUrl);
+  const res = await fetchWith5xxRetry("https://openrouter.ai/api/v1/videos", {
     method: "POST",
-    headers: { Authorization: `Key ${env.FAL_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ image_url: inputUrl, prompt: opts.prompt, duration: "5" }),
+    headers: {
+      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://clawnify.com",
+      "X-Title": "Open Render Studio",
+    },
+    body: JSON.stringify({
+      model: opts.model || DEFAULT_VIDEO_MODEL,
+      prompt: opts.prompt,
+      frame_images: [{ type: "image_url", image_url: { url: firstFrame }, frame_type: "first_frame" }],
+    }),
   });
   const rawText = await res.text();
-  if (!res.ok) throw new Error(`fal.ai ${summarizeUpstreamError(res.status, rawText)}`);
-  const data = JSON.parse(rawText) as { video?: { url: string } };
-  if (!data.video?.url) throw new Error("fal.ai response missing video url");
-  return { url: await rehost(data.video.url, "mp4", "video/mp4") };
+  if (!res.ok) throw new Error(`OpenRouter video ${summarizeUpstreamError(res.status, rawText)}`);
+  const data = JSON.parse(rawText) as { id?: string };
+  if (!data.id) throw new Error("OpenRouter video response missing job id");
+  return { jobId: data.id };
+}
+
+/** Poll a video job. On completion, downloads + re-hosts the clip in R2. */
+export async function pollVideo(env: ImageEnv, jobId: string): Promise<VideoStatus> {
+  if (!env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not set");
+  const auth = { Authorization: `Bearer ${env.OPENROUTER_API_KEY}` };
+  const res = await fetch(`https://openrouter.ai/api/v1/videos/${jobId}`, { headers: auth });
+  const rawText = await res.text();
+  if (!res.ok) throw new Error(`OpenRouter video poll ${summarizeUpstreamError(res.status, rawText)}`);
+  const data = JSON.parse(rawText) as { status?: string; unsigned_urls?: string[]; error?: unknown };
+
+  if (data.status === "failed" || data.status === "error") {
+    return { status: "failed", error: typeof data.error === "string" ? data.error : "video generation failed" };
+  }
+  if (data.status !== "completed") return { status: "pending" };
+
+  const contentUrl = data.unsigned_urls?.[0];
+  if (!contentUrl) return { status: "failed", error: "completed job returned no video url" };
+  // The content endpoint requires the Bearer key — fetch with auth, then re-host.
+  const contentRes = await fetch(contentUrl, { headers: auth });
+  if (!contentRes.ok) return { status: "failed", error: `video download failed (${contentRes.status})` };
+  const bytes = await contentRes.arrayBuffer();
+  const filename = `res_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.mp4`;
+  return { status: "completed", url: await putUpload(filename, bytes, "video/mp4") };
 }

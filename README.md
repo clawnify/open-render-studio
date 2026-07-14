@@ -6,7 +6,7 @@ AI staging & render editing for interior-design and archviz studios. Snap a room
 
 An open-source, self-hostable alternative to Collov / InteriorAI — with three differences that matter:
 
-- **Runs on your own image-model key** (Nano Banana / Gemini image via OpenRouter). No per-image subscription tax.
+- **Runs on one key.** Nano Banana / Gemini image *and* async video generation both go through your own OpenRouter key — no per-image subscription tax, no second provider to configure. (A `FAL_API_KEY` is optional and only upgrades Enhance & Upscale.)
 - **Agent-native** — every tool is also a callable action in the OpenAPI spec, so it works from a chat channel (snap a room in WhatsApp → variants back), not just a web app.
 - **Grounded, not hallucinated** — every edit keeps the room's architecture, camera, and proportions fixed and changes only the one thing named. Tools that touch geometry return an honest note: verify dimensions in your CAD tool. This stays a post/ideation layer, not a fake CAD.
 
@@ -22,8 +22,8 @@ Each tool is a preset directed edit against the source image. Add one by adding 
 | **Furniture Eraser / Declutter** | Empty the room or just remove clutter |
 | **Renovation Before → After** | Visualise a renovation from a plain-language brief |
 | **Relight / Twilight** | Change time of day and mood without a re-render |
-| **Enhance & Upscale** | Portfolio-quality sharpen + upscale (fal SeedVR when a FAL key is set) |
-| **Walkthrough Video** | Animate a still into a cinematic clip (fal Kling image-to-video) |
+| **Enhance & Upscale** | Portfolio-quality sharpen + upscale (fal SeedVR when a FAL key is set, else an OpenRouter enhance pass) |
+| **Walkthrough Video** | Animate a still into a cinematic clip — async via OpenRouter's video API (Wan / Veo) |
 
 ## Quickstart
 
@@ -57,13 +57,13 @@ Open `http://localhost:5173`. The database schema is applied automatically on st
 | **Backend** | Hono (Cloudflare Worker) + `@hono/zod-openapi` |
 | **Database** | D1 (SQLite at the edge) via `@clawnify/db` |
 | **Storage** | R2 (source + result images/video) |
-| **AI** | OpenRouter (Nano Banana / Gemini image edits); fal.ai (upscale + image-to-video) |
+| **AI** | OpenRouter — Nano Banana / Gemini image edits + async video (`/api/v1/videos`); fal.ai optional (upscale quality) |
 
 ### Prerequisites
 
 - Node.js 20+, pnpm
 - [OpenRouter API key](https://openrouter.ai/keys) (required)
-- [fal.ai key](https://fal.ai) (optional — upscale + video)
+- [fal.ai key](https://fal.ai) (optional — only upgrades Enhance & Upscale)
 
 ## Architecture
 
@@ -73,7 +73,7 @@ src/
   server/
     index.ts        — Hono API; runRender() is the single execution path
     tools.ts        — Directed-edit tool registry (UI + agent + prompts)
-    image.ts        — Provider engine: editImage / upscaleImage / imageToVideo
+    image.ts        — Provider engine: editImage / upscaleImage / startVideo + pollVideo
     db.ts           — D1 adapter (@clawnify/db)
     uploads.ts      — R2 storage adapter
   client/
@@ -88,9 +88,11 @@ Human/UI routes are under `/api/*`. Agent-callable routes are in the OpenAPI spe
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/tools` | List directed-edit tools + their inputs |
-| POST | `/api/v1/render` | Run a tool on a source image → result URL |
+| POST | `/api/v1/render` | Run a tool on a source image. Image edits return `done`; video returns `pending` |
+| GET | `/api/v1/renders/:id` | Poll a render — advances a pending async video to `done`/`error` |
 | GET | `/api/tools` | Same tool list (UI) |
 | POST | `/api/render` | Run a tool (UI) |
+| GET | `/api/renders/:id` | Poll a render (UI) |
 | GET/POST | `/api/projects` | Projects (a client engagement / room) |
 | GET | `/api/projects/:id/renders` | Variants for a project |
 | GET/POST | `/api/assets` | Studio's own furniture / style / material library |

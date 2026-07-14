@@ -27,6 +27,7 @@ export type Render = {
   result_image_url: string | null;
   result_video_url: string | null;
   status: string;
+  provider_job_id: string | null;
   error: string | null;
   disclaimer: string | null;
   created_at: string;
@@ -48,4 +49,5 @@ export const api = {
   },
   render: (body: { tool_id: string; source_image_url: string; params: Record<string, string>; project_id?: string }) =>
     fetch("/api/render", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(json<Render>),
+  getRender: (id: string) => fetch(`/api/renders/${id}`).then(json<Render>),
 };

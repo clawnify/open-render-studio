@@ -81,40 +81,59 @@ export function App() {
 
   async function runTool() {
     if (!active || !selected) return;
+    const tool = active;
+    const sub = summarizeParams(params);
     setBusy(true);
     const usingUrl = selected.url; // edits chain off whatever's in the canvas
     try {
-      const r = await api.render({ tool_id: active.id, source_image_url: usingUrl, params });
+      const r = await api.render({ tool_id: tool.id, source_image_url: usingUrl, params });
       setRenders((prev) => [r, ...prev]);
-      if (r.status !== "error" && (r.result_image_url || r.result_video_url)) {
-        setSelected({
-          url: r.result_image_url || r.result_video_url!,
-          kind: "render",
-          label: active.label,
-          sub: summarizeParams(params),
-          disclaimer: r.disclaimer,
-        });
+      if (r.status === "pending") {
+        // Async video — kicked off, poll until it lands.
+        pollRender(r.id, tool.label, sub);
+      } else if (r.status !== "error" && (r.result_image_url || r.result_video_url)) {
+        setSelected({ url: r.result_image_url || r.result_video_url!, kind: "render", label: tool.label, sub, disclaimer: r.disclaimer });
       }
       setActive(null);
     } catch (e) {
-      setRenders((prev) => [errRender(active.id, usingUrl, e), ...prev]);
+      setRenders((prev) => [errRender(tool.id, usingUrl, e), ...prev]);
       setActive(null);
     } finally {
       setBusy(false);
     }
   }
 
+  // Poll a pending (video) render every 5s until it resolves (~7.5 min cap).
+  function pollRender(id: string, label: string, sub: string) {
+    let attempts = 0;
+    const tick = async () => {
+      attempts++;
+      try {
+        const r = await api.getRender(id);
+        setRenders((prev) => prev.map((x) => (x.id === id ? r : x)));
+        if (r.status === "pending" && attempts < 90) {
+          setTimeout(tick, 5000);
+        } else if (r.status === "done" && r.result_video_url) {
+          setSelected({ url: r.result_video_url, kind: "render", label, sub, disclaimer: r.disclaimer });
+        }
+      } catch {
+        if (attempts < 90) setTimeout(tick, 5000);
+      }
+    };
+    setTimeout(tick, 5000);
+  }
+
   const canRun = active?.inputs.every((i) => !i.required || (params[i.name] || "").trim().length > 0) ?? false;
-  const thumbs: Selected[] = [
-    ...(source ? [{ url: source, kind: "source" as const, label: "Source" }] : []),
-    ...renders
-      .filter((r) => r.result_image_url || r.result_video_url)
-      .map((r) => ({
-        url: r.result_image_url || r.result_video_url!,
-        kind: "render" as const,
-        label: tools.find((t) => t.id === r.tool_id)?.label ?? r.tool_id,
-        disclaimer: r.disclaimer,
-      })),
+  const strip = [
+    ...(source ? [{ key: "src", status: "source" as const, url: source, isVideo: false, label: "Source", disclaimer: null as string | null }] : []),
+    ...renders.map((r) => ({
+      key: r.id,
+      status: (r.status === "error" ? "error" : r.status === "pending" ? "pending" : "done") as "error" | "pending" | "done",
+      url: r.result_image_url || r.result_video_url || undefined,
+      isVideo: !!r.result_video_url,
+      label: tools.find((t) => t.id === r.tool_id)?.label ?? r.tool_id,
+      disclaimer: r.disclaimer,
+    })),
   ];
   const selectedIsVideo = !!selected && /\.mp4($|\?)/.test(selected.url);
 
@@ -200,20 +219,38 @@ export function App() {
                 )}
                 {/* thumbnails */}
                 <div className="ml-auto flex items-center gap-2 overflow-x-auto max-w-[60%]">
-                  {thumbs.map((t, i) => (
-                    <button
-                      key={t.url + i}
-                      onClick={() => setSelected(t)}
-                      className={`shrink-0 size-12 rounded-lg overflow-hidden border-2 ${selected.url === t.url ? "border-primary" : "border-border"}`}
-                      title={t.label}
-                    >
-                      {/\.mp4($|\?)/.test(t.url) ? (
-                        <div className="size-full bg-foreground flex items-center justify-center"><Video size={16} className="text-background" /></div>
-                      ) : (
-                        <img src={t.url} alt={t.label} className="size-full object-cover" />
-                      )}
-                    </button>
-                  ))}
+                  {strip.map((t) => {
+                    const isSel = !!t.url && selected.url === t.url;
+                    const cls = `shrink-0 size-12 rounded-lg overflow-hidden border-2 ${isSel ? "border-primary" : "border-border"}`;
+                    if (t.status === "pending") {
+                      return (
+                        <div key={t.key} className={`${cls} bg-sunken flex items-center justify-center`} title={`${t.label} — rendering…`}>
+                          <Loader2 size={16} className="animate-spin text-muted" />
+                        </div>
+                      );
+                    }
+                    if (t.status === "error" || !t.url) {
+                      return (
+                        <div key={t.key} className={`${cls} bg-sunken flex items-center justify-center`} title={`${t.label} — failed`}>
+                          <AlertTriangle size={15} className="text-primary" />
+                        </div>
+                      );
+                    }
+                    return (
+                      <button
+                        key={t.key}
+                        onClick={() => setSelected({ url: t.url!, kind: t.status === "source" ? "source" : "render", label: t.label, disclaimer: t.disclaimer })}
+                        className={cls}
+                        title={t.label}
+                      >
+                        {t.isVideo ? (
+                          <div className="size-full bg-foreground flex items-center justify-center"><Video size={16} className="text-background" /></div>
+                        ) : (
+                          <img src={t.url} alt={t.label} className="size-full object-cover" />
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -231,14 +268,13 @@ export function App() {
               <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-faint">{CATEGORY_LABEL[cat]}</div>
               {items.map((tool) => {
                 const Icon = ICONS[tool.icon] ?? Sparkles;
-                const needsFal = tool.mode === "video" && health ? !health.fal : false;
-                const disabled = !selected || needsFal;
+                const disabled = !selected;
                 return (
                   <button
                     key={tool.id}
                     disabled={disabled}
                     onClick={() => openTool(tool)}
-                    title={needsFal ? "Requires a FAL_API_KEY" : tool.description}
+                    title={tool.description}
                     className="w-full flex items-start gap-2.5 rounded-lg px-2 py-2 text-left hover:bg-sunken disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <Icon size={18} className="text-primary mt-0.5 shrink-0" />

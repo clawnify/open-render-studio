@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS renders (
   result_image_url TEXT,
   result_video_url TEXT,
   status TEXT NOT NULL DEFAULT 'pending', -- pending | done | error
+  provider_job_id TEXT,                -- async video job id (OpenRouter /videos)
   error TEXT,
   disclaimer TEXT,                     -- e.g. dimensional-honesty note for geometry edits
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
