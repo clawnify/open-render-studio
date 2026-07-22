@@ -1,5 +1,5 @@
-import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { initDB, query, get, run } from "./db.js";
+import { createApp, createRoute, z } from "@clawnify/app";
+import { query, get, run } from "./db.js";
 import { initUploads, putUpload, getUpload } from "./uploads.js";
 import { TOOLS, getTool, publicTool } from "./tools.js";
 import { editImage, upscaleImage, startVideo, pollVideo } from "./image.js";
@@ -14,24 +14,19 @@ type Env = {
   };
 };
 
-const app = new OpenAPIHono<Env>();
-// Agent-facing sub-app. Everything registered here shows up in the public
-// OpenAPI doc so the Clawnify agent can discover + call it. Internal UI routes
-// live on `app` and stay out of the public spec.
-const publicApp = new OpenAPIHono<Env>();
+const app = createApp<Env>({
+  title: "Open Render Studio API",
+  version: "1.0.0",
+  description: "Directed-edit render studio: stage, restyle, relight, enhance, and animate room images.",
+});
 
 app.onError((err, c) => {
   console.error(err);
   return c.json({ error: err.message || String(err) }, 500);
 });
 
+// createApp bakes the DB init; uploads init is app-specific, keep it.
 app.use("*", async (c, next) => {
-  initDB(c.env);
-  initUploads(c.env.UPLOADS);
-  await next();
-});
-publicApp.use("*", async (c, next) => {
-  initDB(c.env);
   initUploads(c.env.UPLOADS);
   await next();
 });
@@ -291,7 +286,7 @@ const listToolsRoute = createRoute({
   summary: "List the directed-edit tools an agent can run on a room image.",
   responses: { 200: { content: { "application/json": { schema: z.array(ToolSchema) } }, description: "OK" } },
 });
-publicApp.openapi(listToolsRoute, (c) => c.json(TOOLS.map(publicTool), 200));
+app.openapi(listToolsRoute, (c) => c.json(TOOLS.map(publicTool), 200));
 
 const RenderResultSchema = z.object({
   id: z.string(),
@@ -327,7 +322,7 @@ const renderRoute = createRoute({
     400: { content: { "application/json": { schema: z.object({ error: z.string() }) } }, description: "Bad request" },
   },
 });
-publicApp.openapi(renderRoute, async (c) => {
+app.openapi(renderRoute, async (c) => {
   const body = c.req.valid("json");
   if (!getTool(body.tool_id)) return c.json({ error: `Unknown tool: ${body.tool_id}` }, 400);
   const row = await runRender(c.env, {
@@ -361,7 +356,7 @@ const getRenderRoute = createRoute({
     404: { content: { "application/json": { schema: z.object({ error: z.string() }) } }, description: "Not found" },
   },
 });
-publicApp.openapi(getRenderRoute, async (c) => {
+app.openapi(getRenderRoute, async (c) => {
   const row = await refreshRender(c.env, c.req.valid("param").id);
   if (!row) return c.json({ error: "Not found" }, 404);
   return c.json(
@@ -378,12 +373,5 @@ publicApp.openapi(getRenderRoute, async (c) => {
     200,
   );
 });
-
-// ── OpenAPI doc + mount ──────────────────────────────────────────────
-
-const publicSpec = { openapi: "3.0.0" as const, info: { title: "Open Render Studio API", version: "1.0.0" } };
-publicApp.doc("/openapi.json", publicSpec);
-app.get("/openapi.json", (c) => c.json(publicApp.getOpenAPIDocument(publicSpec)));
-app.route("/", publicApp);
 
 export default app;
